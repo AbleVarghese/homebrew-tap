@@ -138,13 +138,14 @@ jobs:
         run: |
           VERSION="v${{ steps.params.outputs.version }}"
 
-          # Check if release exists
-          if ! gh release view "$VERSION" &>/dev/null; then
+          # Check if release exists (must specify --repo since checkout is ArgusTest)
+          if ! gh release view "$VERSION" --repo AbleVarghese/homebrew-tap &>/dev/null; then
             echo "::error::Release $VERSION not found on homebrew-tap. Run release-local.sh first."
             exit 1
           fi
 
           gh release upload "$VERSION" \
+            --repo AbleVarghese/homebrew-tap \
             --clobber \
             packaging/dist/argus-macos-arm64-*.tar.gz \
             packaging/dist/argus-macos-arm64-*.tar.gz.sha256
