@@ -1,0 +1,152 @@
+# Build arm64 binary for ArgusTest
+# =================================
+# Runs on this PUBLIC repo (unlimited free Actions minutes).
+# Triggered by repository_dispatch from release-local.sh or manual workflow_dispatch.
+# Checks out the PRIVATE ArgusTest repo, builds arm64 binary, uploads to release.
+#
+# SECURITY: This repo is PUBLIC. Workflow logs are visible to everyone.
+# - Build output is suppressed to prevent source path leaks
+# - Only compiled binaries are uploaded as release artifacts
+# - No source code, config files, or directory listings are printed
+#
+# Required secrets:
+#   PRIVATE_REPO_PAT - Fine-grained PAT with read access to AbleVarghese/ArgusTest
+
+name: Build arm64
+
+on:
+  repository_dispatch:
+    types: [build-arm64]
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., 3.1.0)'
+        required: true
+        type: string
+      sha:
+        description: 'Commit SHA from ArgusTest to build'
+        required: true
+        type: string
+
+permissions:
+  contents: write  # Needed for gh release upload to THIS repo
+
+concurrency:
+  group: build-arm64
+  cancel-in-progress: false  # Never cancel a release build
+
+jobs:
+  build-arm64:
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Resolve version and SHA
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            VERSION="${{ github.event.client_payload.version }}"
+            SHA="${{ github.event.client_payload.sha }}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+            SHA="${{ github.event.inputs.sha }}"
+          fi
+
+          if [ -z "$VERSION" ] || [ -z "$SHA" ]; then
+            echo "::error::Missing version or SHA parameter"
+            exit 1
+          fi
+
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid version format: $VERSION (expected N.N.N)"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Building version $VERSION from commit ${SHA:0:8}"
+
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: AbleVarghese/ArgusTest
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ steps.params.outputs.sha }}
+
+      - name: Validate version in source
+        run: |
+          EXPECTED="${{ steps.params.outputs.version }}"
+          CONFIG_VERSION=$(grep -o '"version": "[^"]*"' config/argus.config.json | head -1 | cut -d'"' -f4)
+          if [ "$EXPECTED" != "$CONFIG_VERSION" ]; then
+            echo "::error::Version mismatch: requested $EXPECTED but source has $CONFIG_VERSION"
+            exit 1
+          fi
+          echo "Version validated: $EXPECTED"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        run: |
+          pip install nuitka --quiet
+          brew install shc --quiet 2>/dev/null || true
+
+      - name: Build arm64 binary
+        run: |
+          chmod +x packaging/build-commercial.sh
+          # Suppress verbose output to prevent source path leaks in public logs
+          set +e
+          packaging/build-commercial.sh arm64 > /tmp/build.log 2>&1
+          BUILD_EXIT=$?
+          set -e
+          if [ $BUILD_EXIT -ne 0 ]; then
+            echo "::group::Build output (last 50 lines)"
+            tail -50 /tmp/build.log
+            echo "::endgroup::"
+            echo "::error::Build failed with exit code $BUILD_EXIT"
+            exit 1
+          fi
+          echo "Build completed successfully"
+
+      - name: Verify build output
+        run: |
+          VERSION="${{ steps.params.outputs.version }}"
+          ARCHIVE="packaging/dist/argus-macos-arm64-${VERSION}.tar.gz"
+          CHECKSUM="packaging/dist/argus-macos-arm64-${VERSION}.tar.gz.sha256"
+
+          if [ ! -f "$ARCHIVE" ]; then
+            echo "::error::Build archive not found"
+            exit 1
+          fi
+
+          echo "Archive size: $(du -h "$ARCHIVE" | cut -f1)"
+          echo "SHA256: $(cat "$CHECKSUM" | cut -d' ' -f1)"
+
+          # Verify binary is in the archive (don't list all contents)
+          tar -tzf "$ARCHIVE" | grep -q "bin/argus-mcp" || {
+            echo "::error::argus-mcp binary missing from archive"
+            exit 1
+          }
+          echo "Archive integrity verified"
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="v${{ steps.params.outputs.version }}"
+
+          # Check if release exists
+          if ! gh release view "$VERSION" &>/dev/null; then
+            echo "::error::Release $VERSION not found on homebrew-tap. Run release-local.sh first."
+            exit 1
+          fi
+
+          gh release upload "$VERSION" \
+            --clobber \
+            packaging/dist/argus-macos-arm64-*.tar.gz \
+            packaging/dist/argus-macos-arm64-*.tar.gz.sha256
+
+          echo "arm64 binary uploaded to release $VERSION"
