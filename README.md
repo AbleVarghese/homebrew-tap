@@ -11,7 +11,7 @@ Connect your iPhone via USB. Your AI assistant sees what your app is doing. That
 ## Install
 
 ```bash
-npm i -g @argustest/argus
+npm install -g @argustest/argus
 ```
 
 The installer automatically downloads the correct binary for your Mac:
@@ -86,7 +86,7 @@ When connected via MCP, your AI assistant gets access to these tools:
 
 This repository hosts the CI build infrastructure and binary releases for ArgusTest. Both `arm64` (Apple Silicon) and `x86_64` (Intel) binaries are built automatically in CI and attached to each [GitHub Release](https://github.com/AbleVarghese/homebrew-tap/releases).
 
-When you run `npm i -g @argustest/argus`, the postinstall script downloads the correct binary for your Mac from the latest release here.
+When you run `npm install -g @argustest/argus`, the postinstall script downloads the correct binary for your Mac from the latest release here.
 
 ## License
 
