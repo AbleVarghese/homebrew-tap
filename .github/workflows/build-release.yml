@@ -1,9 +1,9 @@
-# Build macOS binaries for ArgusTest (both architectures)
-# ======================================================
+# Build macOS binaries for ArgusTest (both architectures) + publish to npm
+# ========================================================================
 # Runs on this PUBLIC repo (unlimited free Actions minutes).
 # Triggered by repository_dispatch from release-local.sh or manual workflow_dispatch.
 # Checks out the PRIVATE ArgusTest repo, builds both arm64 and x86_64 binaries,
-# uploads both to the GitHub Release on this repo.
+# uploads both to the GitHub Release on this repo, then publishes to npm.
 #
 # SECURITY: This repo is PUBLIC. Workflow logs are visible to everyone.
 # - Build output is suppressed to prevent source path leaks
@@ -12,6 +12,7 @@
 #
 # Required secrets:
 #   PRIVATE_REPO_PAT - Fine-grained PAT with read access to AbleVarghese/ArgusTest
+#   NPM_TOKEN        - Granular npm token scoped to @argustest/argus (publish)
 
 name: Build Release
 
@@ -166,3 +167,50 @@ jobs:
             packaging/dist/argus-macos-${{ matrix.arch }}-*.tar.gz.sha256
 
           echo "${{ matrix.arch }} binary uploaded to release $VERSION"
+
+  publish-npm:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: AbleVarghese/ArgusTest
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Validate npm package version
+        run: |
+          EXPECTED="${{ needs.resolve.outputs.version }}"
+          NPM_VERSION=$(node -p "require('./packaging/npm/package.json').version")
+          if [ "$EXPECTED" != "$NPM_VERSION" ]; then
+            echo "::error::npm package version ($NPM_VERSION) != release version ($EXPECTED)"
+            exit 1
+          fi
+          echo "npm package version validated: $NPM_VERSION"
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd packaging/npm
+          npm publish --access public
+          echo "Published @argustest/argus@${{ needs.resolve.outputs.version }} to npm"
+
+      - name: Verify publish
+        run: |
+          sleep 5
+          EXPECTED="${{ needs.resolve.outputs.version }}"
+          PUBLISHED=$(npm info @argustest/argus version 2>/dev/null || echo "unknown")
+          if [ "$PUBLISHED" = "$EXPECTED" ]; then
+            echo "Verified: @argustest/argus@$PUBLISHED is live on npm"
+          else
+            echo "::warning::npm shows $PUBLISHED, expected $EXPECTED (propagation may take a minute)"
+          fi
