@@ -113,6 +113,9 @@ jobs:
           brew install shc --quiet 2>/dev/null || true
 
       - name: Build ${{ matrix.arch }} binary
+        env:
+          LICENTRIC_API_KEY: ${{ secrets.LICENTRIC_API_KEY }}
+          LICENTRIC_SIGNING_KEY: ${{ secrets.LICENTRIC_SIGNING_KEY }}
         run: |
           chmod +x packaging/build-commercial.sh
           # Suppress verbose output to prevent source path leaks in public logs
